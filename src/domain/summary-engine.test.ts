@@ -35,6 +35,7 @@ describe('createSummary', () => {
     ])
 
     expect(summary.decisions[0]).toMatchObject({ text: '本周五发布第一版', sourceStartMs: 5_000 })
+    expect(summary.decisions).toHaveLength(1)
     expect(summary.actions[0]).toMatchObject({ owner: '小王', sourceStartMs: 12_000 })
     expect(summary.openQuestions[0].text).toContain('数据库容量')
   })
@@ -46,7 +47,7 @@ describe('createSummary', () => {
       segment('c', '为什么余数一定小于除数？这是课后需要思考的问题。', 15_000),
     ])
 
-    expect(summary.keyPoints.join('')).toContain('剩余部分乘法')
+    expect(summary.keyPoints.map((item) => item.text).join('')).toContain('剩余部分乘法')
     expect(summary.examples[0].sourceStartMs).toBe(8_000)
     expect(summary.openQuestions[0].text).toContain('余数一定小于除数')
   })
