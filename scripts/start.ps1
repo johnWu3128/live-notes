@@ -40,7 +40,6 @@ if (Test-Path $pidFile) {
 }
 
 $process = Start-Process -FilePath 'npm.cmd' -ArgumentList 'start' -WorkingDirectory $project -WindowStyle Hidden -PassThru
-Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii
 $health = $null
 for ($attempt = 0; $attempt -lt 30; $attempt++) {
     try {
@@ -50,5 +49,12 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
 }
 
 if (-not $health -or $health.status -ne 'ok') { throw 'Live Notes startup timed out. Run npm start to inspect logs.' }
+$listener = Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $listener) { throw 'Live Notes is healthy but its listener process could not be identified.' }
+$listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)"
+if (-not $listenerProcess.CommandLine -or $listenerProcess.CommandLine -notlike '*live-notes*server/index.ts*') {
+    throw 'Port 8787 is not owned by the expected Live Notes server process.'
+}
+Set-Content -LiteralPath $pidFile -Value $listener.OwningProcess -Encoding ascii
 Write-Host 'Live Notes started: http://127.0.0.1:8787'
 if (-not $NoBrowser) { Start-Process 'http://127.0.0.1:8787' }
