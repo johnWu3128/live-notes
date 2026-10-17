@@ -1,0 +1,5 @@
+interface:
+  display_name: "实时会议笔记"
+  short_description: "启动并使用听记完成会议或课堂的实时转写、总结与导出"
+  brand_color: "#0C7C59"
+  default_prompt: "使用 $live-meeting-notes 启动听记并引导我完成一次会议或课堂实时转写，结束后检查摘要和导出。"
