@@ -1,8 +1,8 @@
 {
   "name": "live-notes",
   "private": true,
-  "version": "1.0.0",
-  "description": "面向会议和听课场景的实时录音转写与 AI 结构化笔记工具",
+  "version": "1.1.0",
+  "description": "面向会议和听课场景的实时转写、音视频总结与可编辑 PPT 生成工具",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -18,20 +18,26 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "deepen:session": "tsx scripts/deepen-session.ts",
+    "regenerate:ppt": "tsx scripts/regenerate-presentation.ts"
   },
   "dependencies": {
     "express": "^5.3.0",
     "lucide-react": "^1.59.0",
+    "multer": "^2.4.0",
+    "pptxgenjs": "^4.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.8",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
@@ -47,5 +53,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "image-size": "2.0.4"
   }
 }

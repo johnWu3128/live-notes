@@ -1,6 +1,6 @@
 ---
 name: live-meeting-notes
-description: "启动、使用和排查本机听记 Live Notes，完成会议或课堂的实时麦克风转写、增量摘要、OpenClaw 深度总结、时间戳回溯与 Markdown/TXT/SRT/JSON/录音导出。用户提到录音转文字、实时会议纪要、听课笔记、边听边总结、听记、live-notes，或要求打开/停止这套本地工具时使用。"
+description: "启动、使用和排查本机听记 Live Notes，完成会议或课堂实时录音转写，也可把音频或视频生成增量摘要、完整笔记、字幕、关键画面和可编辑 PPT。用户提到录音转文字、实时会议纪要、听课笔记、音视频转 PPT、边听边总结、听记或 live-notes 时使用。"
 ---
 
 # 实时会议笔记
@@ -22,6 +22,15 @@ description: "启动、使用和排查本机听记 Live Notes，完成会议或�
 5. 内容稳定后点击“AI 深度整理”。出现 `OPENCLAW` 表示模型总结成功；若仍是“实时提取”，本地降级摘要仍可使用。
 6. 点击摘要时间戳回到对应转写/录音位置。结束后按需导出 Markdown、TXT、SRT、JSON 或原始 WebM。
 
+## 音视频转笔记与 PPT
+
+1. 先选择“会议”或“听课”，再点击右上角“导入音视频”。
+2. 普通素材选择文件；本机数百 MB 长视频优先使用“本机路径”，填写绝对路径后由服务端直读。
+3. 后台依次执行媒体探测、16kHz 音轨提取、`faster-whisper` 增量转写、OpenClaw 总结、关键帧提取和 PPTX 生成。页面关闭不会主动取消已经开始的后台任务。
+4. 处理中检查进度和新增转写；完成后从“导出”下载 PowerPoint、Markdown、TXT、SRT 和 JSON。
+5. PPT 正文是可编辑文本，视频画面按章节时间戳嵌入；完整章节原文在演讲者备注，完整逐字稿同时保存在 Markdown/TXT/SRT/JSON。
+6. 敏感素材默认只留在本机 `output/`。OpenClaw 深度总结仍会把转写发送到当前配置的模型供应商，应先确认组织政策。
+
 ## 验收
 
 需要代用户验证时，先使用页面的“先看会议演示”或“先看课堂演示”，不要采集真实环境声音。按 `references/acceptance.md` 检查；真实麦克风验收必须由用户明确触发。
@@ -32,6 +41,10 @@ description: "启动、使用和排查本机听记 Live Notes，完成会议或�
 - 麦克风失败：确认使用最新版 Chrome/Edge、地址栏权限和 Windows 麦克风隐私设置。
 - 转写无结果：浏览器识别依赖网络和浏览器服务；录音仍可结束并下载。
 - 深度总结失败：检查本机 OpenClaw 是否可用、模型是否正常；应用会自动保留本地摘要，不要删除已有转写。
+- 音视频任务失败：确认 `ffmpeg`、`ffprobe` 在 PATH 中，且某个 Python 能执行 `import faster_whisper`；可用 `LIVE_NOTES_PYTHON` 指定解释器。
+- OpenClaw 升级后总结回退：运行 `openclaw config validate`、`openclaw agents list` 和 `openclaw gateway status --deep`。CLI 与 Gateway 版本必须一致，且 `architect` 代理必须存在。
+- 转写较慢：默认 `small/int8` 适合 CPU；首次模型下载最慢。高精度可设置 `LIVE_NOTES_WHISPER_MODEL=medium`，但处理时间和内存都会增加。
+- 专有名词识别不准：设置 `LIVE_NOTES_INITIAL_PROMPT` 提供逗号分隔的产品名、系统名和术语；需要指定总结代理时设置 `OPENCLAW_AGENT`。
 - 会话意外关闭：重新打开后文本和摘要从浏览器本地存储恢复，正在录音的状态会恢复为暂停。
 
 ## 停止

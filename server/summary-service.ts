@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
@@ -26,6 +28,7 @@ export interface SummaryRequest {
 }
 export interface SummaryResult { summary: LiveSummary; provider: 'openclaw' | 'local' }
 export type OpenClawRunner = (prompt: string, sessionId: string) => Promise<string>
+let resolvedAgentId = process.env.OPENCLAW_AGENT || 'architect'
 
 const findText = (value: unknown): string | undefined => {
   if (typeof value === 'string') return value.includes('{') ? value : undefined
@@ -70,7 +73,9 @@ const parseOpenClawSummary = (raw: string, mode: NoteMode, segments: TranscriptS
 }
 
 const buildPrompt = ({ mode, segments }: SummaryRequest) => {
-  const transcript = segments.slice(-240).map((item) => `[ms=${item.startMs}][${item.speaker}] ${item.text}`).join('\n')
+  const lines = segments.map((item) => `[ms=${item.startMs}][${item.speaker}] ${item.text}`)
+  const stride = Math.max(1, Math.ceil(lines.join('\n').length / 90_000))
+  const transcript = lines.filter((_, index) => index % stride === 0).join('\n')
   const scene = mode === 'meeting'
     ? '会议：重点提取议题、决策、行动项、负责人、截止时间、风险和待确认问题。'
     : '课堂：重点提取知识结构、核心概念、例子、易错点和复习问题；actions 与 decisions 可为空。'
@@ -80,9 +85,25 @@ const buildPrompt = ({ mode, segments }: SummaryRequest) => {
 export const runOpenClaw: OpenClawRunner = async (prompt, sessionId) => {
   const entry = process.env.OPENCLAW_ENTRY || path.join(path.dirname(process.execPath), 'node_modules', 'openclaw', 'openclaw.mjs')
   const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'default'
-  const args = [entry, 'agent', '--agent', 'architect', '--session-key', `agent:architect:live-notes-${safeSession}`, '--message', prompt, '--thinking', 'off', '--timeout', '75', '--json']
-  const { stdout } = await execFileAsync(process.execPath, args, { windowsHide: true, timeout: 90_000, maxBuffer: 4 * 1024 * 1024 })
-  return stdout
+  const promptDir = await fs.mkdtemp(path.join(os.tmpdir(), 'live-notes-openclaw-'))
+  const promptPath = path.join(promptDir, 'prompt.txt')
+  await fs.writeFile(promptPath, prompt, { encoding: 'utf8', mode: 0o600 })
+  const execute = async (agentId: string) => {
+    const args = [entry, 'agent', '--agent', agentId, '--session-key', `agent:${agentId}:live-notes-${safeSession}`, '--message-file', promptPath, '--thinking', 'off', '--timeout', '180', '--json']
+    return (await execFileAsync(process.execPath, args, { windowsHide: true, timeout: 210_000, maxBuffer: 8 * 1024 * 1024 })).stdout
+  }
+  try {
+    try { return await execute(resolvedAgentId) }
+    catch (firstError) {
+      if (process.env.OPENCLAW_AGENT) throw firstError
+      const { stdout } = await execFileAsync(process.execPath, [entry, 'agents', 'list', '--json'], { windowsHide: true, timeout: 45_000, maxBuffer: 2 * 1024 * 1024 })
+      const agents = z.array(z.object({ id: z.string().min(1) })).parse(JSON.parse(stdout))
+      const fallback = agents.find((agent) => agent.id === 'architect')?.id || agents.find((agent) => agent.id === 'coordinator')?.id || agents[0]?.id
+      if (!fallback || fallback === resolvedAgentId) throw firstError
+      resolvedAgentId = fallback
+      return execute(fallback)
+    }
+  } finally { await fs.rm(promptDir, { recursive: true, force: true }) }
 }
 
 export function createSummaryService(runner: OpenClawRunner = runOpenClaw) {

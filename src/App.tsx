@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
   Bookmark, BookOpen, Check, ChevronDown, CircleStop, Clock3, Download, FileText,
-  GraduationCap, Highlighter, ListChecks, Mic, Pause, Play, RotateCcw, Search,
-  ShieldCheck, Sparkles, Users, Volume2, WandSparkles,
+  FileVideo, GraduationCap, Highlighter, ListChecks, Mic, Pause, Play, Presentation,
+  RotateCcw, Search, ShieldCheck, Sparkles, Upload, Users, Volume2, WandSparkles,
 } from 'lucide-react'
 import './App.css'
+import { MediaImportDialog } from './components/MediaImportDialog'
 import { exportMarkdown, exportSrt, formatClock } from './domain/exporters'
+import { mediaStageLabel, type MediaArtifactKey, type MediaJobView } from './domain/media'
 import { createSession, sessionReducer } from './domain/session-reducer'
 import type { LiveSummary, NoteMode, NoteSession, TraceableNote } from './domain/types'
 import { useLiveRecorder } from './hooks/useLiveRecorder'
 
 const STORAGE_KEY = 'live-notes.active-session.v1'
+const MEDIA_JOB_KEY = 'live-notes.active-media-job.v1'
 
 const restoreSession = (): NoteSession => {
   try {
@@ -50,6 +53,15 @@ const noteRows = (items: TraceableNote[], onJump: (atMs: number) => void, empty:
   ))
   : <p className="empty-note">{empty}</p>
 
+const sessionFromMediaJob = (job: MediaJobView): NoteSession => ({
+  ...createSession(job.mode, job.title),
+  id: job.id,
+  status: job.status === 'completed' || job.status === 'failed' ? 'stopped' : 'recording',
+  elapsedMs: job.durationMs,
+  segments: job.segments,
+  summary: job.summary,
+})
+
 function App() {
   const [session, dispatch] = useReducer(sessionReducer, undefined, restoreSession)
   const [now, setNow] = useState(() => new Date().getTime())
@@ -57,12 +69,16 @@ function App() {
   const [currentSpeaker, setCurrentSpeaker] = useState('说话人 1')
   const [exportOpen, setExportOpen] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [mediaJob, setMediaJob] = useState<MediaJobView>()
   const [notice, setNotice] = useState('笔记仅保存在当前浏览器；语音识别服务取决于浏览器设置。')
   const transcriptRef = useRef<HTMLDivElement>(null)
   const elapsedRef = useRef(0)
   const elapsed = Math.max(0, session.status === 'recording' && session.activeSince != null
     ? session.elapsedMs + now - session.activeSince
     : session.elapsedMs)
+  const mediaJobId = mediaJob?.id
+  const mediaJobStatus = mediaJob?.status
 
   const recorder = useLiveRecorder({
     speaker: currentSpeaker,
@@ -75,6 +91,17 @@ function App() {
     const timer = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(timer)
   }, [])
+  useEffect(() => {
+    const savedJobId = localStorage.getItem(MEDIA_JOB_KEY)
+    if (!savedJobId) return
+    void fetch(`/api/media/jobs/${savedJobId}`).then(async (response) => {
+      if (!response.ok) { localStorage.removeItem(MEDIA_JOB_KEY); return }
+      const restored = await response.json() as MediaJobView
+      setMediaJob(restored)
+      dispatch({ type: 'restore', session: sessionFromMediaJob(restored) })
+      setNotice(restored.error || restored.message)
+    }).catch(() => setNotice('暂时无法恢复媒体任务，后台服务可能正在重启。'))
+  }, [])
   useEffect(() => { elapsedRef.current = elapsed }, [elapsed])
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...session, activeSince: undefined, status: session.status === 'recording' ? 'paused' : session.status }))
@@ -82,6 +109,20 @@ function App() {
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' })
   }, [session.segments])
+  useEffect(() => {
+    if (!mediaJobId || mediaJobStatus === 'completed' || mediaJobStatus === 'failed') return
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/media/jobs/${mediaJobId}`)
+        if (!response.ok) return
+        const next = await response.json() as MediaJobView
+        setMediaJob(next)
+        dispatch({ type: 'restore', session: sessionFromMediaJob(next) })
+        setNotice(next.error || next.message)
+      } catch { setNotice('正在等待后台任务响应，转写任务仍会继续。') }
+    }, 1_500)
+    return () => window.clearInterval(timer)
+  }, [mediaJobId, mediaJobStatus])
 
   const filteredSegments = useMemo(
     () => session.segments.filter((item) => item.text.toLowerCase().includes(query.toLowerCase())),
@@ -132,14 +173,29 @@ function App() {
   }
 
   const jumpTo = (atMs: number) => {
-    const audio = document.querySelector<HTMLAudioElement>('.audio-player')
-    if (audio && recorder.audioUrl) audio.currentTime = atMs / 1000
+    const audio = document.querySelector<HTMLMediaElement>('.media-player, .audio-player')
+    if (audio) audio.currentTime = atMs / 1000
     document.querySelector(`[data-start="${atMs}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
   const reset = () => {
     recorder.reset()
+    setMediaJob(undefined)
+    localStorage.removeItem(MEDIA_JOB_KEY)
     dispatch({ type: 'restore', session: createSession(session.mode) })
     setNotice('已新建空白记录。')
+  }
+
+  const acceptMediaJob = (job: MediaJobView) => {
+    recorder.reset()
+    setMediaJob(job)
+    localStorage.setItem(MEDIA_JOB_KEY, job.id)
+    setImportOpen(false)
+    dispatch({ type: 'restore', session: sessionFromMediaJob(job) })
+    setNotice('任务已创建，正在后台读取媒体。')
+  }
+
+  const mediaDownloadLabel: Record<MediaArtifactKey, string> = {
+    pptx: '可编辑 PowerPoint', markdown: 'Markdown 完整笔记', text: '纯文本转写', srt: 'SRT 字幕', json: 'JSON 数据',
   }
   const exportSession = (kind: 'md' | 'txt' | 'srt' | 'json') => {
     const base = session.title.replace(/[\\/:*?"<>|]/g, '-') || '实时笔记'
@@ -157,15 +213,18 @@ function App() {
         <div className="brand"><span className="brand-mark"><Volume2 size={18} /></span><strong>听记</strong><span>实时录音笔记</span></div>
         <div className="privacy"><ShieldCheck size={15} /> 笔记本机保存</div>
         <div className="top-actions">
+          <button className="ghost-button import-button" onClick={() => setImportOpen(true)}><Upload size={17} /> 导入音视频</button>
           <button className="ghost-button" onClick={reset} title="新建记录"><RotateCcw size={17} /> 新建</button>
           <div className="export-wrap">
             <button className="primary-small" onClick={() => setExportOpen((value) => !value)} disabled={!session.segments.length}><Download size={17} /> 导出 <ChevronDown size={14} /></button>
             {exportOpen && <div className="export-menu">
-              <button onClick={() => exportSession('md')}>Markdown 笔记</button>
-              <button onClick={() => exportSession('txt')}>纯文本</button>
-              <button onClick={() => exportSession('srt')}>SRT 字幕</button>
-              <button onClick={() => exportSession('json')}>JSON 数据</button>
-              {recorder.audioUrl && <a href={recorder.audioUrl} download={`${session.title}.webm`}>原始录音 WebM</a>}
+              {mediaJob?.status === 'completed' ? (Object.entries(mediaJob.artifacts) as Array<[MediaArtifactKey, string]>).map(([key, url]) => <a href={url} key={key}>{key === 'pptx' && <Presentation size={14} />} {mediaDownloadLabel[key]}</a>) : <>
+                <button onClick={() => exportSession('md')}>Markdown 笔记</button>
+                <button onClick={() => exportSession('txt')}>纯文本</button>
+                <button onClick={() => exportSession('srt')}>SRT 字幕</button>
+                <button onClick={() => exportSession('json')}>JSON 数据</button>
+                {recorder.audioUrl && <a href={recorder.audioUrl} download={`${session.title}.webm`}>原始录音 WebM</a>}
+              </>}
             </div>}
           </div>
         </div>
@@ -177,36 +236,40 @@ function App() {
           <button className={session.mode === 'meeting' ? 'active' : ''} onClick={() => changeMode('meeting')}><Users size={16} /> 会议</button>
           <button className={session.mode === 'class' ? 'active' : ''} onClick={() => changeMode('class')}><GraduationCap size={16} /> 听课</button>
         </div>
-        <label className="speaker-select">当前发言人<select value={currentSpeaker} onChange={(event) => setCurrentSpeaker(event.target.value)}><option>说话人 1</option><option>说话人 2</option><option>老师</option><option>学生</option><option>主持人</option></select></label>
-        <span className={`live-state ${session.status}`}><i />{session.status === 'recording' ? '正在记录' : session.status === 'paused' ? '已暂停' : session.status === 'stopped' ? '已结束' : '准备就绪'}</span>
+        {!mediaJob && <label className="speaker-select">当前发言人<select value={currentSpeaker} onChange={(event) => setCurrentSpeaker(event.target.value)}><option>说话人 1</option><option>说话人 2</option><option>老师</option><option>学生</option><option>主持人</option></select></label>}
+        <span className={`live-state ${mediaJob?.status === 'processing' ? 'recording' : session.status}`}><i />{mediaJob ? `${mediaStageLabel[mediaJob.stage] || mediaJob.stage} ${mediaJob.progress}%` : session.status === 'recording' ? '正在记录' : session.status === 'paused' ? '已暂停' : session.status === 'stopped' ? '已结束' : '准备就绪'}</span>
       </section>
 
       <div className="workspace">
         <section className="transcript-pane">
           <div className="pane-heading"><div><span className="eyebrow">LIVE TRANSCRIPT</span><h1>实时转写</h1></div><label className="search"><Search size={16} /><input aria-label="搜索转写" placeholder="搜索内容" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div>
           <div className="transcript" ref={transcriptRef} aria-live="polite">
-            {!filteredSegments.length && <div className="empty-state"><span><Mic size={28} /></span><h2>开始记录这段重要内容</h2><p>允许麦克风后，临时识别结果会立即出现，确认后的句子自动进入笔记。</p><button className="demo-button" onClick={runDemo}><WandSparkles size={16} /> 先看{session.mode === 'meeting' ? '会议' : '课堂'}演示</button></div>}
+            {mediaJob && <section className={`media-job-banner ${mediaJob.status}`}><div><FileVideo size={19} /><span><strong>{mediaStageLabel[mediaJob.stage] || '处理中'}</strong><small>{mediaJob.message}</small></span><b>{mediaJob.progress}%</b></div><div className="job-progress"><i style={{ width: `${mediaJob.progress}%` }} /></div>{mediaJob.error && <p>{mediaJob.error}</p>}</section>}
+            {!filteredSegments.length && !mediaJob && <div className="empty-state"><span><Mic size={28} /></span><h2>开始记录这段重要内容</h2><p>可实时录音，也可导入已有音视频，自动生成完整转写、总结和可编辑 PPT。</p><div className="empty-actions"><button className="demo-button" onClick={runDemo}><WandSparkles size={16} /> 先看{session.mode === 'meeting' ? '会议' : '课堂'}演示</button><button className="demo-button" onClick={() => setImportOpen(true)}><Upload size={16} /> 导入音视频</button></div></div>}
             {filteredSegments.map((item) => <article className={`segment ${item.isFinal ? '' : 'interim'}`} key={item.id} data-start={item.startMs}>
               <button className="avatar" onClick={() => jumpTo(item.startMs)}>{item.speaker.slice(0, 1)}</button>
               <div><div className="segment-meta"><strong>{item.speaker}</strong><time><Clock3 size={13} />{formatClock(item.startMs)}</time>{!item.isFinal && <span>识别中</span>}</div><p>{item.text}</p></div>
             </article>)}
           </div>
-          {recorder.audioUrl && <audio src={recorder.audioUrl} controls className="audio-player" />}
+          {mediaJob && mediaJob.segments.length > 0 && (mediaJob.mediaKind === 'video' ? <video src={mediaJob.mediaUrl} controls className="media-player" /> : <audio src={mediaJob.mediaUrl} controls className="media-player" />)}
+          {!mediaJob && recorder.audioUrl && <audio src={recorder.audioUrl} controls className="audio-player" />}
           <div className="wave-strip" aria-hidden="true">{Array.from({ length: 52 }, (_, index) => <i key={index} style={{ height: session.status === 'recording' ? `${12 + ((index * 17) % 28)}px` : '5px' }} />)}</div>
           <div className="record-controls">
             <div className="timer"><Clock3 size={17} /><strong>{formatClock(elapsed)}</strong><span>{session.segments.filter((item) => item.isFinal).length} 段</span></div>
             <div className="main-controls">
-              {session.status === 'idle' && <button className="record-button" onClick={start}><Mic size={22} /> 开始录音</button>}
-              {session.status === 'recording' && <button className="round-button pause" onClick={pause} title="暂停"><Pause size={22} /></button>}
-              {session.status === 'paused' && <button className="round-button play" onClick={resume} title="继续"><Play size={22} /></button>}
-              {(session.status === 'recording' || session.status === 'paused') && <button className="round-button stop" onClick={stop} title="结束"><CircleStop size={22} /></button>}
+              {mediaJob ? <span className="processing-label">{mediaJob.status === 'completed' ? '成果已就绪' : mediaJob.status === 'failed' ? '处理失败' : '后台处理中，可关闭页面后继续'}</span> : <>
+                {session.status === 'idle' && <button className="record-button" onClick={start}><Mic size={22} /> 开始录音</button>}
+                {session.status === 'recording' && <button className="round-button pause" onClick={pause} title="暂停"><Pause size={22} /></button>}
+                {session.status === 'paused' && <button className="round-button play" onClick={resume} title="继续"><Play size={22} /></button>}
+                {(session.status === 'recording' || session.status === 'paused') && <button className="round-button stop" onClick={stop} title="结束"><CircleStop size={22} /></button>}
+              </>}
             </div>
-            <button className="bookmark-button" disabled={session.status === 'idle'} onClick={() => dispatch({ type: 'bookmark', atMs: elapsed })}><Bookmark size={17} /> 标记重点</button>
+            <button className="bookmark-button" disabled={session.status === 'idle' || !!mediaJob} onClick={() => dispatch({ type: 'bookmark', atMs: elapsed })}><Bookmark size={17} /> 标记重点</button>
           </div>
         </section>
 
         <aside className="summary-pane">
-          <div className="pane-heading summary-heading"><div><span className="eyebrow">LIVE NOTES</span><h1>实时总结</h1></div><button className="ai-button" onClick={deepenSummary} disabled={aiBusy || !session.segments.length}><Sparkles size={16} /> {aiBusy ? '整理中...' : 'AI 深度整理'}</button></div>
+          <div className="pane-heading summary-heading"><div><span className="eyebrow">LIVE NOTES</span><h1>实时总结</h1></div><button className="ai-button" onClick={deepenSummary} disabled={aiBusy || !session.segments.length || mediaJob?.status === 'processing'}><Sparkles size={16} /> {aiBusy ? '整理中...' : 'AI 深度整理'}</button></div>
           <div className="summary-scroll">
             <section className="headline-card"><span>{session.summary.source === 'openclaw' ? 'OPENCLAW' : '实时提取'}</span><h2>{session.summary.headline}</h2><p>最近更新 {new Date(session.summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</p></section>
             <SummarySection icon={<Highlighter size={17} />} title={session.mode === 'meeting' ? '关键要点' : '知识要点'} count={session.summary.keyPoints.length}>{noteRows(session.summary.keyPoints, jumpTo, '内容出现后自动提炼')}</SummarySection>
@@ -219,7 +282,8 @@ function App() {
           </div>
         </aside>
       </div>
-      <footer className="statusbar"><span className={recorder.error ? 'error' : ''}>{recorder.error || notice}</span><span>{recorder.supported ? 'Chrome / Edge 实时识别可用' : '当前浏览器不支持实时识别，可使用演示能力'}</span></footer>
+      <footer className="statusbar"><span className={recorder.error ? 'error' : ''}>{recorder.error || notice}</span><span>{mediaJob ? '音视频由本机 faster-whisper 转写' : recorder.supported ? 'Chrome / Edge 实时识别可用' : '当前浏览器不支持实时识别，可使用演示能力'}</span></footer>
+      {importOpen && <MediaImportDialog mode={session.mode} onClose={() => setImportOpen(false)} onCreated={acceptMediaJob} />}
     </main>
   )
 }
