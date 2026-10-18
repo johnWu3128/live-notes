@@ -11,7 +11,18 @@ test('opens the media import workflow on desktop', async ({ page }) => {
   await page.getByRole('button', { name: '本机路径' }).click()
   await page.getByLabel('本机文件绝对路径').fill('D:\\Videos\\lesson.mp4')
   await expect(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '纯代码' })).toBeVisible()
+  await page.getByRole('button', { name: '配置模型' }).click()
+  await expect(page.getByLabel('模型供应商')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'OpenClaw' })).toBeVisible()
   await page.screenshot({ path: 'output/playwright/media-import-desktop.png', fullPage: true })
+})
+
+test('offers microphone, computer audio and mixed realtime capture', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('radio', { name: '麦克风' })).toBeChecked()
+  await expect(page.getByRole('radio', { name: '电脑声音' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '麦克风和电脑声音' })).toBeVisible()
 })
 
 test('restores a media task and shows its transcript, summary and player', async ({ page }) => {

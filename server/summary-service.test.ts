@@ -37,4 +37,29 @@ describe('summary service', () => {
     expect(result.summary.decisions).toHaveLength(1)
     expect(result.summary.actions[0].owner).toBe('小王')
   })
+
+  it('uses the code-only engine without invoking OpenClaw or a direct model', async () => {
+    const runOpenClaw = vi.fn()
+    const runModel = vi.fn()
+    const summarize = createSummaryService({ runOpenClaw, runModel })
+
+    const result = await summarize({ sessionId: 'local-only', mode: 'meeting', segments, backend: 'local' })
+
+    expect(result.provider).toBe('local')
+    expect(runOpenClaw).not.toHaveBeenCalled()
+    expect(runModel).not.toHaveBeenCalled()
+  })
+
+  it('uses a directly configured model and marks the summary source', async () => {
+    const modelResponse = '{"headline":"模型总结","topics":[],"keyPoints":[{"text":"周五发布","sourceStartMs":1000}],"decisions":[],"actions":[],"openQuestions":[],"examples":[]}'
+    const runModel = vi.fn().mockResolvedValue(modelResponse)
+    const summarize = createSummaryService({ runOpenClaw: vi.fn(), runModel })
+    const model = { provider: 'qwen' as const, apiKey: 'test-secret', baseUrl: 'https://example.test/v1', model: 'qwen-plus' }
+
+    const result = await summarize({ sessionId: 'direct-model', mode: 'meeting', segments, backend: 'model', model })
+
+    expect(result.provider).toBe('model')
+    expect(result.summary.source).toBe('model')
+    expect(runModel).toHaveBeenCalledWith(expect.stringContaining('<transcript>'), model)
+  })
 })
