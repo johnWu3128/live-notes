@@ -36,7 +36,7 @@ describe('HTTP API', () => {
 
     await request(app).post('/api/realtime/transcribe')
       .field('sessionId', 'realtime-session').field('mode', 'class').field('speaker', '系统声音').field('offsetMs', '12000')
-      .attach('audio', Buffer.from('RIFF-test-WAVE'), { filename: 'chunk.wav', contentType: 'audio/wav' })
+      .attach('audio', Buffer.from('RIFF1234WAVE'), { filename: 'chunk.wav', contentType: 'audio/wav' })
       .expect(200)
       .expect(({ body }) => expect(body.segments[0]).toMatchObject({ text: '电脑正在播放课程内容。', startMs: 12_000 }))
   })

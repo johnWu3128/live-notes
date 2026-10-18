@@ -2,18 +2,20 @@ import { useState, type FormEvent } from 'react'
 import { FileAudio, FileVideo, FolderOpen, ShieldCheck, Upload, X } from 'lucide-react'
 import type { MediaJobView } from '../domain/media'
 import type { NoteMode } from '../domain/types'
+import type { SummaryConfig } from '../domain/ai'
 
 interface MediaImportDialogProps {
   mode: NoteMode
   onClose: () => void
   onCreated: (job: MediaJobView) => void
+  summaryConfig: SummaryConfig
 }
 
 /**
  * 提供大文件上传和本机绝对路径两种导入方式，并显示上传进度。
  * @author wuyc
  */
-export function MediaImportDialog({ mode, onClose, onCreated }: MediaImportDialogProps) {
+export function MediaImportDialog({ mode, onClose, onCreated, summaryConfig }: MediaImportDialogProps) {
   const [sourceMode, setSourceMode] = useState<'file' | 'path'>('file')
   const [file, setFile] = useState<File>()
   const [localPath, setLocalPath] = useState('')
@@ -30,7 +32,7 @@ export function MediaImportDialog({ mode, onClose, onCreated }: MediaImportDialo
       if (sourceMode === 'path') {
         const response = await fetch('/api/media/jobs/path', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: localPath, title: title || undefined, mode }),
+          body: JSON.stringify({ path: localPath, title: title || undefined, mode, summaryConfig }),
         })
         if (!response.ok) throw new Error(response.status === 404 ? '找不到文件，或格式不受支持。' : '创建任务失败。')
         onCreated(await response.json() as MediaJobView)
@@ -41,6 +43,7 @@ export function MediaImportDialog({ mode, onClose, onCreated }: MediaImportDialo
       form.append('media', file)
       form.append('mode', mode)
       if (title.trim()) form.append('title', title.trim())
+      form.append('summaryConfig', JSON.stringify(summaryConfig))
       const job = await new Promise<MediaJobView>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhr.open('POST', '/api/media/jobs/upload')
@@ -75,8 +78,8 @@ export function MediaImportDialog({ mode, onClose, onCreated }: MediaImportDialo
           <span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : '支持长视频，上传后在后台处理'}</span>
         </label> : <label className="field-label">本机文件绝对路径<input value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="D:\\Videos\\meeting.mp4" required /></label>}
         <label className="field-label">笔记与 PPT 标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="留空时使用文件名" /></label>
-        <div className="media-deliverables"><span>完整转写</span><span>实时总结</span><span>关键画面</span><span>可编辑 PPTX</span><span>MD / SRT / JSON</span></div>
-        <p className="privacy-note"><ShieldCheck size={15} /> 媒体与转写保存在本机；AI 深度总结会使用你当前配置的 OpenClaw 模型。</p>
+        <div className="media-deliverables"><span>完整转写</span><span>实时总结</span><span>关键画面</span><span>Word / PDF</span><span>MD / PPTX</span></div>
+        <p className="privacy-note"><ShieldCheck size={15} /> 媒体与转写保存在本机；当前使用{summaryConfig.backend === 'local' ? '纯代码总结，不调用外部模型' : summaryConfig.backend === 'model' ? '直连模型总结，API Key 不落盘' : '本机 OpenClaw 总结'}。</p>
         {busy && sourceMode === 'file' && <div className="upload-progress"><i style={{ width: `${progress}%` }} /><span>正在上传 {progress}%</span></div>}
         {error && <p className="form-error">{error}</p>}
         <footer><button type="button" className="ghost-button" onClick={onClose}>取消</button><button className="primary-small import-submit" disabled={busy || (sourceMode === 'file' ? !file : !localPath.trim())}>{busy ? '正在创建任务...' : '开始生成'}</button></footer>

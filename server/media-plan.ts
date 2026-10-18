@@ -120,7 +120,7 @@ export function buildDeckPlan(input: DeckPlanInput): DeckPlan {
     bullets: [
       `来源文件：${input.sourceName}`,
       `素材类型：${input.hasVideo ? '视频（含关键画面）' : '音频'}`,
-      `完整内容：同时生成 Markdown、TXT、SRT 与 JSON，可按时间戳回溯原文。`,
+      `完整内容：同时生成 Word、PDF、Markdown、TXT、SRT 与 JSON，可按时间戳回溯原文。`,
       `生成原则：仅依据转写与摘要组织，不补充素材中不存在的事实。`,
     ],
     sourceStartMs: Math.max(0, input.durationMs - 1_000),

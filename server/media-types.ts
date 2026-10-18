@@ -1,8 +1,9 @@
 import type { LiveSummary, NoteMode, TranscriptSegment } from '../src/domain/types'
+import type { SummaryConfig } from '../src/domain/ai'
 
 export type MediaJobStage = 'queued' | 'probing' | 'extracting' | 'transcribing' | 'summarizing' | 'capturing' | 'presenting' | 'completed' | 'failed'
 export type MediaJobStatus = 'queued' | 'processing' | 'completed' | 'failed'
-export type MediaArtifactKey = 'pptx' | 'markdown' | 'text' | 'srt' | 'json'
+export type MediaArtifactKey = 'docx' | 'pdf' | 'pptx' | 'markdown' | 'text' | 'srt' | 'json'
 
 export interface MediaJobInput {
   sourcePath: string
@@ -10,6 +11,7 @@ export interface MediaJobInput {
   title: string
   sourceName?: string
   deleteSourceOnFinish?: boolean
+  summaryConfig?: SummaryConfig
 }
 
 export interface MediaProcessorInput extends MediaJobInput {

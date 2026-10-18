@@ -3,26 +3,27 @@ import { expect, test } from '@playwright/test'
 test('opens the media import workflow on desktop', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/')
+  await expect(page.getByRole('button', { name: /纯代码/ })).toBeVisible()
+  await page.getByRole('button', { name: /配置模型/ }).click()
+  await expect(page.getByLabel('模型供应商')).toBeVisible()
+  await expect(page.getByRole('button', { name: /OpenClaw/ })).toBeVisible()
+  await page.getByRole('button', { name: /纯代码/ }).click()
   await page.getByRole('button', { name: '导入音视频' }).first().click()
 
   await expect(page.getByRole('heading', { name: '导入音视频生成笔记与 PPT' })).toBeVisible()
   await expect(page.getByText('完整转写', { exact: true })).toBeVisible()
-  await expect(page.getByText('可编辑 PPTX', { exact: true })).toBeVisible()
+  await expect(page.getByText('MD / PPTX', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '本机路径' }).click()
   await page.getByLabel('本机文件绝对路径').fill('D:\\Videos\\lesson.mp4')
   await expect(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
-  await expect(page.getByRole('button', { name: '纯代码' })).toBeVisible()
-  await page.getByRole('button', { name: '配置模型' }).click()
-  await expect(page.getByLabel('模型供应商')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'OpenClaw' })).toBeVisible()
   await page.screenshot({ path: 'output/playwright/media-import-desktop.png', fullPage: true })
 })
 
 test('offers microphone, computer audio and mixed realtime capture', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('radio', { name: '麦克风' })).toBeChecked()
-  await expect(page.getByRole('radio', { name: '电脑声音' })).toBeVisible()
-  await expect(page.getByRole('radio', { name: '麦克风和电脑声音' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '麦克风', exact: true })).toBeChecked()
+  await expect(page.getByRole('radio', { name: '电脑声音', exact: true })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '麦克风和电脑声音', exact: true })).toBeVisible()
 })
 
 test('restores a media task and shows its transcript, summary and player', async ({ page }) => {

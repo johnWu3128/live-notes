@@ -9,32 +9,61 @@ import type { MediaJobManager } from './media-job-manager'
 import type { MediaArtifactKey } from './media-types'
 import type { SummaryResult } from './summary-service'
 import type { LiveSummary, NoteMode, TranscriptSegment } from '../src/domain/types'
+import type { NoteSession } from '../src/domain/types'
+import type { DirectModelConfig, SummaryBackend, SummaryConfig } from '../src/domain/ai'
+import type { RealtimeTranscriptionService } from './realtime-transcriber'
+import { generateSessionDocuments } from './document-service'
 
 const segmentSchema = z.object({
   id: z.string(), text: z.string().min(1), startMs: z.number().nonnegative(), endMs: z.number().nonnegative(),
   speaker: z.string().min(1), isFinal: z.boolean(), confidence: z.number().optional(),
 })
+const modelSchema = z.object({
+  provider: z.enum(['qwen', 'deepseek', 'glm', 'kimi', 'openai', 'claude', 'custom']),
+  apiKey: z.string().min(1).max(4096),
+  baseUrl: z.string().url().max(2048).refine((value) => ['http:', 'https:'].includes(new URL(value).protocol)),
+  model: z.string().min(1).max(160),
+})
+const summaryConfigSchema = z.object({
+  backend: z.enum(['local', 'model', 'openclaw']).default('local'),
+  model: modelSchema.optional(),
+}).refine((value) => value.backend !== 'model' || Boolean(value.model), { message: 'model_config_required', path: ['model'] })
 const requestSchema = z.object({
   sessionId: z.string().min(1).default('web'),
   mode: z.enum(['meeting', 'class']),
   segments: z.array(segmentSchema).min(1).max(5000),
   currentSummary: z.unknown().optional(),
+  backend: z.enum(['local', 'model', 'openclaw']).default('local'),
+  model: modelSchema.optional(),
+}).refine((value) => value.backend !== 'model' || Boolean(value.model), {
+  message: 'model_config_required', path: ['model'],
 })
-type Summarize = (request: { sessionId: string; mode: NoteMode; segments: TranscriptSegment[]; currentSummary?: LiveSummary }) => Promise<SummaryResult>
+type Summarize = (request: { sessionId: string; mode: NoteMode; segments: TranscriptSegment[]; currentSummary?: LiveSummary; backend?: SummaryBackend; model?: DirectModelConfig }) => Promise<SummaryResult>
 
 const pathJobSchema = z.object({
   path: z.string().min(1),
   title: z.string().min(1).max(160).optional(),
   mode: z.enum(['meeting', 'class']).default('class'),
+  summaryConfig: summaryConfigSchema.default({ backend: 'local' }),
 })
-const artifactKeys = new Set<MediaArtifactKey>(['pptx', 'markdown', 'text', 'srt', 'json'])
+const artifactKeys = new Set<MediaArtifactKey>(['docx', 'pdf', 'pptx', 'markdown', 'text', 'srt', 'json'])
 const mediaExtensions = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'])
+const sessionExportSchema = z.object({
+  id: z.string().min(1).max(160), title: z.string().min(1).max(160), mode: z.enum(['meeting', 'class']),
+  status: z.enum(['idle', 'recording', 'paused', 'stopped']), elapsedMs: z.number().nonnegative(),
+  segments: z.array(segmentSchema).max(10_000), bookmarks: z.array(z.object({ id: z.string(), label: z.string(), atMs: z.number().nonnegative() })).default([]),
+  summary: z.object({
+    headline: z.string(), topics: z.array(z.any()), keyPoints: z.array(z.any()), decisions: z.array(z.any()),
+    actions: z.array(z.any()), openQuestions: z.array(z.any()), examples: z.array(z.any()), updatedAt: z.string(),
+    source: z.enum(['local', 'model', 'openclaw']),
+  }),
+})
 
 /**
  * 创建本地 Web 应用并挂载实时笔记和长音视频任务接口。
  * @author wuyc
  */
-export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
+export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager, services: { realtimeTranscriber?: RealtimeTranscriptionService } = {}) {
   const app = express()
   const dataRoot = path.resolve(process.env.LIVE_NOTES_DATA_DIR || path.join(process.cwd(), 'output'))
   const uploadDir = path.join(dataRoot, 'uploads')
@@ -44,6 +73,7 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
     limits: { fileSize: 4 * 1024 * 1024 * 1024, files: 1 },
     fileFilter: (_request, file, callback) => callback(null, mediaExtensions.has(path.extname(file.originalname).toLowerCase())),
   })
+  const realtimeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1 } })
   app.disable('x-powered-by')
   app.use(express.json({ limit: '2mb' }))
   app.get('/api/health', (_request, response) => response.json({ status: 'ok', service: 'live-notes' }))
@@ -52,6 +82,18 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
     if (!parsed.success) { response.status(400).json({ error: 'invalid_request', details: parsed.error.issues }); return }
     try { response.json(await summarize(parsed.data as Parameters<Summarize>[0])) }
     catch { response.status(503).json({ error: 'summary_unavailable' }) }
+  })
+  app.post('/api/realtime/transcribe', realtimeUpload.single('audio'), async (request, response) => {
+    if (!services.realtimeTranscriber) { response.status(503).json({ error: 'realtime_transcriber_unavailable' }); return }
+    const fields = z.object({
+      sessionId: z.string().min(1).max(160), mode: z.enum(['meeting', 'class']), speaker: z.string().min(1).max(80),
+      offsetMs: z.coerce.number().int().nonnegative().max(24 * 60 * 60 * 1000),
+    }).safeParse(request.body)
+    const audio = request.file?.buffer
+    const isWav = audio && audio.length >= 12 && audio.subarray(0, 4).toString() === 'RIFF' && audio.subarray(8, 12).toString() === 'WAVE'
+    if (!fields.success || !isWav) { response.status(400).json({ error: 'invalid_audio_chunk' }); return }
+    try { response.json({ segments: await services.realtimeTranscriber.transcribeChunk({ ...fields.data, audio }) }) }
+    catch { response.status(503).json({ error: 'realtime_transcription_unavailable' }) }
   })
   app.post('/api/media/jobs/path', async (request, response) => {
     if (!mediaJobs) { response.status(503).json({ error: 'media_jobs_unavailable' }); return }
@@ -63,7 +105,7 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
       const stat = await fsp.stat(sourcePath)
       if (!stat.isFile() || !mediaExtensions.has(extension)) throw new Error('invalid media')
       const title = parsed.data.title?.trim() || path.basename(sourcePath, extension)
-      response.status(202).json(await mediaJobs.create({ sourcePath, sourceName: path.basename(sourcePath), title, mode: parsed.data.mode }))
+      response.status(202).json(await mediaJobs.create({ sourcePath, sourceName: path.basename(sourcePath), title, mode: parsed.data.mode, summaryConfig: parsed.data.summaryConfig as SummaryConfig }))
     } catch { response.status(404).json({ error: 'media_not_found_or_unsupported' }) }
   })
   app.post('/api/media/jobs/upload', upload.single('media'), async (request, response) => {
@@ -72,7 +114,17 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
     const mode = request.body.mode === 'meeting' ? 'meeting' : 'class'
     const extension = path.extname(request.file.originalname)
     const title = String(request.body.title || path.basename(request.file.originalname, extension)).slice(0, 160)
-    response.status(202).json(await mediaJobs.create({ sourcePath: request.file.path, sourceName: request.file.originalname, title, mode }))
+    let summaryConfig: SummaryConfig = { backend: 'local' }
+    try {
+      const parsed = summaryConfigSchema.safeParse(JSON.parse(String(request.body.summaryConfig || '{"backend":"local"}')))
+      if (!parsed.success) throw new Error('invalid')
+      summaryConfig = parsed.data as SummaryConfig
+    } catch {
+      await fsp.rm(request.file.path, { force: true })
+      response.status(400).json({ error: 'invalid_summary_config' })
+      return
+    }
+    response.status(202).json(await mediaJobs.create({ sourcePath: request.file.path, sourceName: request.file.originalname, title, mode, summaryConfig }))
   })
   app.get('/api/media/jobs/:id', (request, response) => {
     const job = mediaJobs?.get(request.params.id)
@@ -90,6 +142,17 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager) {
     const source = mediaJobs?.getSource(request.params.id)
     if (!source || !fs.existsSync(source)) { response.status(404).end(); return }
     response.sendFile(path.resolve(source))
+  })
+  app.post('/api/export/:format', async (request, response) => {
+    const format = z.enum(['docx', 'pdf', 'pptx', 'markdown']).safeParse(request.params.format)
+    const session = sessionExportSchema.safeParse(request.body)
+    if (!format.success || !session.success) { response.status(400).json({ error: 'invalid_export_request' }); return }
+    const safeId = session.data.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'session'
+    const directory = path.join(dataRoot, 'session-exports', safeId)
+    try {
+      const artifacts = await generateSessionDocuments(session.data as NoteSession, directory)
+      response.download(artifacts[format.data])
+    } catch { response.status(500).json({ error: 'export_failed' }) }
   })
 
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist')

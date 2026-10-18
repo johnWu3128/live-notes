@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { exportMarkdown, exportSrt, formatClock } from '../src/domain/exporters'
 import type { NoteSession } from '../src/domain/types'
 import { buildDeckPlan } from '../server/media-plan'
+import { generatePdfDocument, generateWordDocument } from '../server/document-service'
 import { generatePresentation } from '../server/presentation-service'
 import type { MediaArtifactKey, MediaJob } from '../server/media-types'
 
@@ -25,6 +26,8 @@ async function main() {
     fs.writeFile(`${basePath}.md`, exportMarkdown(session), 'utf8'),
     fs.writeFile(`${basePath}.txt`, session.segments.map((segment) => `[${formatClock(segment.startMs)}] ${segment.speaker}：${segment.text}`).join('\n'), 'utf8'),
     fs.writeFile(`${basePath}.srt`, exportSrt(session.segments), 'utf8'),
+    generateWordDocument(session, `${basePath}.docx`),
+    generatePdfDocument(session, `${basePath}.pdf`),
   ])
   const plan = buildDeckPlan({
     title: session.title, mode: session.mode, durationMs: session.elapsedMs, segments: session.segments,
@@ -42,6 +45,8 @@ async function main() {
   }
   await generatePresentation(plan, outputPath)
   const artifactCandidates: Record<MediaArtifactKey, string> = {
+    docx: `${basePath}.docx`,
+    pdf: `${basePath}.pdf`,
     pptx: outputPath,
     markdown: `${basePath}.md`,
     text: `${basePath}.txt`,

@@ -9,6 +9,7 @@ import type { NoteSession, TranscriptSegment } from '../src/domain/types'
 import { buildDeckPlan } from './media-plan'
 import type { MediaProcessor, MediaProcessorInput } from './media-types'
 import { generatePresentation } from './presentation-service'
+import { generatePdfDocument, generateWordDocument } from './document-service'
 import type { SummaryRequest, SummaryResult } from './summary-service'
 
 const execFileAsync = promisify(execFile)
@@ -140,7 +141,10 @@ export function createMediaProcessor(summarize: Summarize): MediaProcessor {
     await fs.rm(audioPath, { force: true })
 
     events.update({ stage: 'summarizing', progress: 82, message: '正在生成结构化总结' })
-    const summaryResult = await summarize({ sessionId: input.jobId, mode: input.mode, segments })
+    const summaryResult = await summarize({
+      sessionId: input.jobId, mode: input.mode, segments,
+      backend: input.summaryConfig?.backend || 'local', model: input.summaryConfig?.model,
+    })
     const plan = buildDeckPlan({ title: input.title, mode: input.mode, durationMs, segments, summary: summaryResult.summary, sourceName: input.sourceName || path.basename(input.sourcePath), hasVideo })
 
     if (hasVideo) {
@@ -151,6 +155,13 @@ export function createMediaProcessor(summarize: Summarize): MediaProcessor {
     const artifacts = await writeArtifacts(input, durationMs, segments, summaryResult.summary)
     const pptx = path.join(input.outputDir, `${safeName(input.title)}.pptx`)
     await generatePresentation(plan, pptx)
-    return { durationMs, mediaKind: hasVideo ? 'video' : 'audio', summary: summaryResult.summary, artifacts: { ...artifacts, pptx } }
+    const docx = path.join(input.outputDir, `${safeName(input.title)}.docx`)
+    const pdf = path.join(input.outputDir, `${safeName(input.title)}.pdf`)
+    const session: NoteSession = {
+      id: input.jobId, title: input.title, mode: input.mode, status: 'stopped', elapsedMs: durationMs,
+      segments, summary: summaryResult.summary, bookmarks: [],
+    }
+    await Promise.all([generateWordDocument(session, docx), generatePdfDocument(session, pdf)])
+    return { durationMs, mediaKind: hasVideo ? 'video' : 'audio', summary: summaryResult.summary, artifacts: { ...artifacts, docx, pdf, pptx } }
   }
 }

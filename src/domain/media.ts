@@ -1,6 +1,6 @@
 import type { LiveSummary, NoteMode, TranscriptSegment } from './types'
 
-export type MediaArtifactKey = 'pptx' | 'markdown' | 'text' | 'srt' | 'json'
+export type MediaArtifactKey = 'docx' | 'pdf' | 'pptx' | 'markdown' | 'text' | 'srt' | 'json'
 
 export interface MediaJobView {
   id: string

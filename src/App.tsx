@@ -6,11 +6,13 @@ import {
 } from 'lucide-react'
 import './App.css'
 import { MediaImportDialog } from './components/MediaImportDialog'
+import { SummaryEngineSelector } from './components/SummaryEngineSelector'
+import { createModelConfig, type SummaryConfig } from './domain/ai'
 import { exportMarkdown, exportSrt, formatClock } from './domain/exporters'
 import { mediaStageLabel, type MediaArtifactKey, type MediaJobView } from './domain/media'
 import { createSession, sessionReducer } from './domain/session-reducer'
 import type { LiveSummary, NoteMode, NoteSession, TraceableNote } from './domain/types'
-import { useLiveRecorder } from './hooks/useLiveRecorder'
+import { useAudioCapture, type CaptureSource } from './hooks/useAudioCapture'
 
 const STORAGE_KEY = 'live-notes.active-session.v1'
 const MEDIA_JOB_KEY = 'live-notes.active-media-job.v1'
@@ -45,6 +47,14 @@ const saveText = (name: string, text: string, type = 'text/plain;charset=utf-8')
   window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
 }
 
+const saveBlob = (name: string, blob: Blob) => {
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = name
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+}
+
 const noteRows = (items: TraceableNote[], onJump: (atMs: number) => void, empty: string) => items.length
   ? items.map((item, index) => (
     <button className="note-row" key={`${item.text}-${index}`} onClick={() => onJump(item.sourceStartMs)}>
@@ -71,6 +81,9 @@ function App() {
   const [aiBusy, setAiBusy] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [mediaJob, setMediaJob] = useState<MediaJobView>()
+  const [summaryConfig, setSummaryConfig] = useState<SummaryConfig>({ backend: 'local', model: createModelConfig() })
+  const [captureSource, setCaptureSource] = useState<CaptureSource>('microphone')
+  const [exportBusy, setExportBusy] = useState(false)
   const [notice, setNotice] = useState('笔记仅保存在当前浏览器；语音识别服务取决于浏览器设置。')
   const transcriptRef = useRef<HTMLDivElement>(null)
   const elapsedRef = useRef(0)
@@ -80,8 +93,11 @@ function App() {
   const mediaJobId = mediaJob?.id
   const mediaJobStatus = mediaJob?.status
 
-  const recorder = useLiveRecorder({
+  const recorder = useAudioCapture({
+    sessionId: session.id,
+    mode: session.mode,
     speaker: currentSpeaker,
+    captureSource,
     getElapsedMs: () => elapsedRef.current,
     onSegment: (segment) => dispatch({ type: 'segment', segment }),
     onNotice: setNotice,
@@ -161,12 +177,15 @@ function App() {
       const response = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: session.id, mode: session.mode, segments: session.segments.filter((item) => item.isFinal), currentSummary: session.summary }),
+        body: JSON.stringify({
+          sessionId: session.id, mode: session.mode, segments: session.segments.filter((item) => item.isFinal), currentSummary: session.summary,
+          backend: summaryConfig.backend, model: summaryConfig.backend === 'model' ? summaryConfig.model : undefined,
+        }),
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const result = await response.json() as { summary: LiveSummary; provider: string }
       dispatch({ type: 'set-summary', summary: result.summary })
-      setNotice(result.provider === 'openclaw' ? 'OpenClaw 深度总结已更新。' : '已使用本地引擎整理摘要。')
+      setNotice(result.provider === 'openclaw' ? 'OpenClaw 深度总结已更新。' : result.provider === 'model' ? '直连模型总结已更新。' : '已使用纯代码引擎整理摘要。')
     } catch {
       setNotice('AI 深度整理暂不可用，实时本地摘要仍可正常使用。')
     } finally { setAiBusy(false) }
@@ -195,7 +214,7 @@ function App() {
   }
 
   const mediaDownloadLabel: Record<MediaArtifactKey, string> = {
-    pptx: '可编辑 PowerPoint', markdown: 'Markdown 完整笔记', text: '纯文本转写', srt: 'SRT 字幕', json: 'JSON 数据',
+    docx: 'Word 完整笔记', pdf: 'PDF 完整笔记', pptx: '可编辑 PowerPoint', markdown: 'Markdown 完整笔记', text: '纯文本转写', srt: 'SRT 字幕', json: 'JSON 数据',
   }
   const exportSession = (kind: 'md' | 'txt' | 'srt' | 'json') => {
     const base = session.title.replace(/[\\/:*?"<>|]/g, '-') || '实时笔记'
@@ -205,6 +224,21 @@ function App() {
     if (kind === 'srt') saveText(`${base}.srt`, exportSrt(session.segments))
     if (kind === 'json') saveText(`${base}.json`, JSON.stringify(completed, null, 2), 'application/json;charset=utf-8')
     setExportOpen(false)
+  }
+
+  const exportDocument = async (format: 'docx' | 'pdf' | 'pptx' | 'markdown') => {
+    setExportBusy(true)
+    try {
+      const completed = { ...session, elapsedMs: elapsed, activeSince: undefined, status: session.status === 'recording' ? 'paused' as const : session.status }
+      const response = await fetch(`/api/export/${format}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(completed) })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const extension = format === 'markdown' ? 'md' : format
+      const base = session.title.replace(/[\\/:*?"<>|]/g, '-') || '实时笔记'
+      saveBlob(`${base}.${extension}`, await response.blob())
+      setExportOpen(false)
+      setNotice(`${extension.toUpperCase()} 文档已生成。`)
+    } catch { setNotice('文档生成失败，请检查后台服务。') }
+    finally { setExportBusy(false) }
   }
 
   return (
@@ -219,7 +253,10 @@ function App() {
             <button className="primary-small" onClick={() => setExportOpen((value) => !value)} disabled={!session.segments.length}><Download size={17} /> 导出 <ChevronDown size={14} /></button>
             {exportOpen && <div className="export-menu">
               {mediaJob?.status === 'completed' ? (Object.entries(mediaJob.artifacts) as Array<[MediaArtifactKey, string]>).map(([key, url]) => <a href={url} key={key}>{key === 'pptx' && <Presentation size={14} />} {mediaDownloadLabel[key]}</a>) : <>
-                <button onClick={() => exportSession('md')}>Markdown 笔记</button>
+                <button onClick={() => void exportDocument('docx')} disabled={exportBusy}>Word 文档</button>
+                <button onClick={() => void exportDocument('pdf')} disabled={exportBusy}>PDF 文档</button>
+                <button onClick={() => void exportDocument('pptx')} disabled={exportBusy}>PowerPoint</button>
+                <button onClick={() => void exportDocument('markdown')} disabled={exportBusy}>Markdown 笔记</button>
                 <button onClick={() => exportSession('txt')}>纯文本</button>
                 <button onClick={() => exportSession('srt')}>SRT 字幕</button>
                 <button onClick={() => exportSession('json')}>JSON 数据</button>
@@ -237,8 +274,15 @@ function App() {
           <button className={session.mode === 'class' ? 'active' : ''} onClick={() => changeMode('class')}><GraduationCap size={16} /> 听课</button>
         </div>
         {!mediaJob && <label className="speaker-select">当前发言人<select value={currentSpeaker} onChange={(event) => setCurrentSpeaker(event.target.value)}><option>说话人 1</option><option>说话人 2</option><option>老师</option><option>学生</option><option>主持人</option></select></label>}
+        {!mediaJob && <div className="capture-source" role="radiogroup" aria-label="声音来源">
+          <label><input type="radio" name="capture-source" checked={captureSource === 'microphone'} onChange={() => setCaptureSource('microphone')} disabled={session.status === 'recording' || session.status === 'paused'} />麦克风</label>
+          <label><input type="radio" name="capture-source" checked={captureSource === 'system'} onChange={() => setCaptureSource('system')} disabled={session.status === 'recording' || session.status === 'paused'} />电脑声音</label>
+          <label><input type="radio" name="capture-source" checked={captureSource === 'mixed'} onChange={() => setCaptureSource('mixed')} disabled={session.status === 'recording' || session.status === 'paused'} />麦克风和电脑声音</label>
+        </div>}
         <span className={`live-state ${mediaJob?.status === 'processing' ? 'recording' : session.status}`}><i />{mediaJob ? `${mediaStageLabel[mediaJob.stage] || mediaJob.stage} ${mediaJob.progress}%` : session.status === 'recording' ? '正在记录' : session.status === 'paused' ? '已暂停' : session.status === 'stopped' ? '已结束' : '准备就绪'}</span>
       </section>
+
+      <div className="engine-bar"><span>总结方式</span><SummaryEngineSelector value={summaryConfig} onChange={setSummaryConfig} disabled={session.status === 'recording' || mediaJob?.status === 'processing'} /></div>
 
       <div className="workspace">
         <section className="transcript-pane">
@@ -269,9 +313,9 @@ function App() {
         </section>
 
         <aside className="summary-pane">
-          <div className="pane-heading summary-heading"><div><span className="eyebrow">LIVE NOTES</span><h1>实时总结</h1></div><button className="ai-button" onClick={deepenSummary} disabled={aiBusy || !session.segments.length || mediaJob?.status === 'processing'}><Sparkles size={16} /> {aiBusy ? '整理中...' : 'AI 深度整理'}</button></div>
+          <div className="pane-heading summary-heading"><div><span className="eyebrow">LIVE NOTES</span><h1>实时总结</h1></div><button className="ai-button" onClick={deepenSummary} disabled={aiBusy || !session.segments.length || mediaJob?.status === 'processing' || (summaryConfig.backend === 'model' && (!summaryConfig.model?.apiKey || !summaryConfig.model.model))}><Sparkles size={16} /> {aiBusy ? '整理中...' : '重新整理'}</button></div>
           <div className="summary-scroll">
-            <section className="headline-card"><span>{session.summary.source === 'openclaw' ? 'OPENCLAW' : '实时提取'}</span><h2>{session.summary.headline}</h2><p>最近更新 {new Date(session.summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</p></section>
+            <section className="headline-card"><span>{session.summary.source === 'openclaw' ? 'OPENCLAW' : session.summary.source === 'model' ? 'DIRECT MODEL' : '纯代码实时提取'}</span><h2>{session.summary.headline}</h2><p>最近更新 {new Date(session.summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</p></section>
             <SummarySection icon={<Highlighter size={17} />} title={session.mode === 'meeting' ? '关键要点' : '知识要点'} count={session.summary.keyPoints.length}>{noteRows(session.summary.keyPoints, jumpTo, '内容出现后自动提炼')}</SummarySection>
             {session.mode === 'meeting' ? <>
               <SummarySection icon={<Check size={17} />} title="决策结论" count={session.summary.decisions.length}>{noteRows(session.summary.decisions, jumpTo, '尚未识别到明确决策')}</SummarySection>
@@ -283,7 +327,7 @@ function App() {
         </aside>
       </div>
       <footer className="statusbar"><span className={recorder.error ? 'error' : ''}>{recorder.error || notice}</span><span>{mediaJob ? '音视频由本机 faster-whisper 转写' : recorder.supported ? 'Chrome / Edge 实时识别可用' : '当前浏览器不支持实时识别，可使用演示能力'}</span></footer>
-      {importOpen && <MediaImportDialog mode={session.mode} onClose={() => setImportOpen(false)} onCreated={acceptMediaJob} />}
+      {importOpen && <MediaImportDialog mode={session.mode} summaryConfig={summaryConfig} onClose={() => setImportOpen(false)} onCreated={acceptMediaJob} />}
     </main>
   )
 }

@@ -30,7 +30,7 @@ export interface LiveSummary {
   openQuestions: TraceableNote[]
   examples: TraceableNote[]
   updatedAt: string
-  source: 'local' | 'openclaw'
+  source: 'local' | 'model' | 'openclaw'
 }
 
 export interface Bookmark {

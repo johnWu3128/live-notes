@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import { createSummary } from '../src/domain/summary-engine'
+import { MODEL_PROVIDER_PRESETS, type DirectModelConfig, type SummaryBackend } from '../src/domain/ai'
 import type { LiveSummary, NoteMode, TranscriptSegment } from '../src/domain/types'
 
 const execFileAsync = promisify(execFile)
@@ -25,9 +26,13 @@ export interface SummaryRequest {
   mode: NoteMode
   segments: TranscriptSegment[]
   currentSummary?: LiveSummary
+  backend?: SummaryBackend
+  model?: DirectModelConfig
 }
-export interface SummaryResult { summary: LiveSummary; provider: 'openclaw' | 'local' }
+export interface SummaryResult { summary: LiveSummary; provider: 'openclaw' | 'model' | 'local' }
 export type OpenClawRunner = (prompt: string, sessionId: string) => Promise<string>
+export type DirectModelRunner = (prompt: string, config: DirectModelConfig) => Promise<string>
+export interface SummaryServiceOptions { runOpenClaw?: OpenClawRunner; runModel?: DirectModelRunner }
 let resolvedAgentId = process.env.OPENCLAW_AGENT || 'architect'
 
 const findText = (value: unknown): string | undefined => {
@@ -41,7 +46,7 @@ const findText = (value: unknown): string | undefined => {
   return undefined
 }
 
-const parseOpenClawSummary = (raw: string, mode: NoteMode, segments: TranscriptSegment[]): LiveSummary => {
+const parseModelSummary = (raw: string, mode: NoteMode, segments: TranscriptSegment[], source: 'model' | 'openclaw'): LiveSummary => {
   let content = raw
   try { content = findText(JSON.parse(raw)) || raw } catch { /* 允许 CLI 直接返回模型文本。 */ }
   const jsonText = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] || content.match(/\{[\s\S]*\}/)?.[0]
@@ -68,7 +73,7 @@ const parseOpenClawSummary = (raw: string, mode: NoteMode, segments: TranscriptS
     openQuestions: mergeNotes(trace(parsed.openQuestions), local.openQuestions),
     examples: mergeNotes(trace(parsed.examples), local.examples),
     updatedAt: new Date().toISOString(),
-    source: 'openclaw',
+    source,
   }
 }
 
@@ -106,11 +111,59 @@ export const runOpenClaw: OpenClawRunner = async (prompt, sessionId) => {
   } finally { await fs.rm(promptDir, { recursive: true, force: true }) }
 }
 
-export function createSummaryService(runner: OpenClawRunner = runOpenClaw) {
+const safeEndpoint = (baseUrl: string, suffix: string) => {
+  const parsed = new URL(baseUrl)
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('模型接口地址无效')
+  return `${parsed.toString().replace(/\/$/, '')}${suffix}`
+}
+
+/**
+ * 调用直连模型；兼容 OpenAI Chat Completions 与 Anthropic Messages 协议。
+ * @author wuyc
+ */
+export const runDirectModel: DirectModelRunner = async (prompt, config) => {
+  const preset = MODEL_PROVIDER_PRESETS.find((item) => item.id === config.provider)
+  const protocol = preset?.protocol || 'openai'
+  if (!config.apiKey.trim() || !config.model.trim()) throw new Error('模型 API Key 或模型名称为空')
+  const common = { method: 'POST', signal: AbortSignal.timeout(180_000) }
+  const response = protocol === 'anthropic'
+    ? await fetch(safeEndpoint(config.baseUrl, '/v1/messages'), {
+        ...common,
+        headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: config.model, max_tokens: 8_192, messages: [{ role: 'user', content: prompt }] }),
+      })
+    : await fetch(safeEndpoint(config.baseUrl, '/chat/completions'), {
+        ...common,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
+        body: JSON.stringify({ model: config.model, messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 8_192 }),
+      })
+  if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`)
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }>; content?: Array<{ type?: string; text?: string }> }
+  const text = protocol === 'anthropic'
+    ? payload.content?.find((item) => item.type === 'text')?.text
+    : payload.choices?.[0]?.message?.content
+  if (!text) throw new Error('模型没有返回可解析文本')
+  return text
+}
+
+/**
+ * 根据纯代码、直连模型或 OpenClaw 三种后端生成总结，并始终保留本地降级能力。
+ * @author wuyc
+ */
+export function createSummaryService(options: OpenClawRunner | SummaryServiceOptions = {}) {
+  const configured = typeof options === 'function' ? { runOpenClaw: options } : options
+  const openClawRunner = configured.runOpenClaw || runOpenClaw
+  const modelRunner = configured.runModel || runDirectModel
   return async (request: SummaryRequest): Promise<SummaryResult> => {
+    if ((request.backend || 'local') === 'local') return { summary: createSummary(request.mode, request.segments), provider: 'local' }
     try {
-      const raw = await runner(buildPrompt(request), request.sessionId)
-      return { summary: parseOpenClawSummary(raw, request.mode, request.segments), provider: 'openclaw' }
+      if (request.backend === 'model') {
+        if (!request.model) throw new Error('缺少模型配置')
+        const raw = await modelRunner(buildPrompt(request), request.model)
+        return { summary: parseModelSummary(raw, request.mode, request.segments, 'model'), provider: 'model' }
+      }
+      const raw = await openClawRunner(buildPrompt(request), request.sessionId)
+      return { summary: parseModelSummary(raw, request.mode, request.segments, 'openclaw'), provider: 'openclaw' }
     } catch {
       return { summary: createSummary(request.mode, request.segments), provider: 'local' }
     }

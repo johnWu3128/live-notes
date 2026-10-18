@@ -1,7 +1,7 @@
 {
   "name": "live-notes",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "面向会议和听课场景的实时转写、音视频总结与可编辑 PPT 生成工具",
   "license": "MIT",
   "engines": {
@@ -23,9 +23,11 @@
     "regenerate:ppt": "tsx scripts/regenerate-presentation.ts"
   },
   "dependencies": {
+    "docx": "^9.12.0",
     "express": "^5.3.0",
     "lucide-react": "^1.59.0",
     "multer": "^2.4.0",
+    "pdfkit": "^0.20.2",
     "pptxgenjs": "^4.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -39,6 +41,7 @@
     "@types/express": "^5.0.6",
     "@types/multer": "^2.3.0",
     "@types/node": "^24.13.3",
+    "@types/pdfkit": "^0.17.6",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@types/supertest": "^7.2.1",
