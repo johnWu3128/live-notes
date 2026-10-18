@@ -21,7 +21,11 @@ describe('media job manager', () => {
         durationMs: 2_000,
         mediaKind: 'video' as const,
         summary: { ...emptySummary(), headline: '测试总结' },
-        artifacts: { pptx: `${input.outputDir}/result.pptx`, markdown: `${input.outputDir}/notes.md` },
+        speedRead: {
+          keywords: ['测试'], abstract: '测试导读', chapters: [], speakerSummaries: [], reviews: [], todos: [],
+          mindMap: { title: '测试', children: [] }, notes: '', frames: [],
+        },
+        artifacts: { pptx: `${input.outputDir}/result.pptx`, extractedPptx: `${input.outputDir}/result_PPT.pptx`, markdown: `${input.outputDir}/notes.md` },
       }
     })
     const manager = new MediaJobManager({ processor, outputRoot: 'test-output', persist: false })
@@ -33,6 +37,8 @@ describe('media job manager', () => {
     release()
     await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'))
     expect(manager.getArtifact(created.id, 'pptx')).toContain('result.pptx')
+    expect(manager.getArtifact(created.id, 'extractedPptx')).toContain('result_PPT.pptx')
+    expect(manager.get(created.id)?.speedRead?.abstract).toBe('测试导读')
   })
 
   it('keeps processor errors visible instead of losing the job', async () => {
