@@ -1,6 +1,24 @@
 import type { LiveSummary, NoteMode, TranscriptSegment } from './types'
 
 export type MediaArtifactKey = 'docx' | 'pdf' | 'pptx' | 'markdown' | 'text' | 'srt' | 'json'
+  | 'transcriptDocx' | 'guideDocx' | 'notesDocx' | 'extractedPptx' | 'xmind'
+
+export interface MindMapNode {
+  title: string
+  children: MindMapNode[]
+}
+
+export interface SpeedReadGuide {
+  keywords: string[]
+  abstract: string
+  chapters: Array<{ title: string; summary: string; startMs: number; endMs: number; keyPoints: string[] }>
+  speakerSummaries: Array<{ speaker: string; summary: string; sourceStartMs: number }>
+  reviews: Array<{ question: string; answer: string; sourceStartMs: number }>
+  todos: Array<{ text: string; owner?: string; due?: string; sourceStartMs: number }>
+  mindMap: MindMapNode
+  notes: string
+  frames: Array<{ startMs: number; endMs: number; transcript: string; chapterIndex: number; imageUrl?: string }>
+}
 
 export interface MediaJobView {
   id: string
@@ -15,6 +33,7 @@ export interface MediaJobView {
   mediaKind?: 'audio' | 'video'
   segments: TranscriptSegment[]
   summary: LiveSummary
+  speedRead?: SpeedReadGuide
   artifacts: Partial<Record<MediaArtifactKey, string>>
   mediaUrl: string
   error?: string

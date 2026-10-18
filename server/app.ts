@@ -46,7 +46,10 @@ const pathJobSchema = z.object({
   mode: z.enum(['meeting', 'class']).default('class'),
   summaryConfig: summaryConfigSchema.default({ backend: 'local' }),
 })
-const artifactKeys = new Set<MediaArtifactKey>(['docx', 'pdf', 'pptx', 'markdown', 'text', 'srt', 'json'])
+const artifactKeys = new Set<MediaArtifactKey>([
+  'docx', 'pdf', 'pptx', 'markdown', 'text', 'srt', 'json',
+  'transcriptDocx', 'guideDocx', 'notesDocx', 'extractedPptx', 'xmind',
+])
 const mediaExtensions = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'])
 const sessionExportSchema = z.object({
   id: z.string().min(1).max(160), title: z.string().min(1).max(160), mode: z.enum(['meeting', 'class']),
@@ -137,6 +140,22 @@ export function createApp(summarize: Summarize, mediaJobs?: MediaJobManager, ser
     const artifact = mediaJobs?.getArtifact(request.params.id, key)
     if (!artifact || !fs.existsSync(artifact)) { response.status(404).end(); return }
     response.download(artifact)
+  })
+  app.get('/api/media/jobs/:id/frames/:index', (request, response) => {
+    const index = z.coerce.number().int().nonnegative().max(1000).safeParse(request.params.index)
+    if (!index.success) { response.status(404).end(); return }
+    const frame = mediaJobs?.getSpeedReadFrame(request.params.id, index.data)
+    if (!frame || !fs.existsSync(frame)) { response.status(404).end(); return }
+    response.sendFile(path.resolve(frame))
+  })
+  app.post('/api/media/jobs/:id/notes', async (request, response) => {
+    const parsed = z.object({ notes: z.string().max(100_000) }).safeParse(request.body)
+    if (!parsed.success) { response.status(400).json({ error: 'invalid_notes' }); return }
+    try {
+      const job = await mediaJobs?.updateNotes(request.params.id, parsed.data.notes)
+      if (!job) { response.status(404).json({ error: 'job_not_found' }); return }
+      response.json(job)
+    } catch { response.status(500).json({ error: 'notes_export_failed' }) }
   })
   app.get('/api/media/jobs/:id/media', (request, response) => {
     const source = mediaJobs?.getSource(request.params.id)

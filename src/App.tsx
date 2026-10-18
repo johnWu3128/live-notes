@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
   Bookmark, BookOpen, Check, ChevronDown, CircleStop, Clock3, Download, FileText,
-  FileVideo, GraduationCap, Highlighter, ListChecks, Mic, Pause, Play, Presentation,
+  FileVideo, GraduationCap, Highlighter, ListChecks, Mic, Pause, Play,
   RotateCcw, Search, ShieldCheck, Sparkles, Upload, Users, Volume2, WandSparkles,
 } from 'lucide-react'
 import './App.css'
 import { MediaImportDialog } from './components/MediaImportDialog'
+import { MediaExportDialog } from './components/MediaExportDialog'
+import { SpeedReadPanel } from './components/SpeedReadPanel'
 import { SummaryEngineSelector } from './components/SummaryEngineSelector'
 import { createModelConfig, type SummaryConfig } from './domain/ai'
 import { exportMarkdown, exportSrt, formatClock } from './domain/exporters'
-import { mediaStageLabel, type MediaArtifactKey, type MediaJobView } from './domain/media'
+import { mediaStageLabel, type MediaJobView } from './domain/media'
 import { createSession, sessionReducer } from './domain/session-reducer'
 import type { LiveSummary, NoteMode, NoteSession, TraceableNote } from './domain/types'
 import { useAudioCapture, type CaptureSource } from './hooks/useAudioCapture'
@@ -78,6 +80,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [currentSpeaker, setCurrentSpeaker] = useState('说话人 1')
   const [exportOpen, setExportOpen] = useState(false)
+  const [mediaExportOpen, setMediaExportOpen] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [mediaJob, setMediaJob] = useState<MediaJobView>()
@@ -213,9 +216,6 @@ function App() {
     setNotice('任务已创建，正在后台读取媒体。')
   }
 
-  const mediaDownloadLabel: Record<MediaArtifactKey, string> = {
-    docx: 'Word 完整笔记', pdf: 'PDF 完整笔记', pptx: '可编辑 PowerPoint', markdown: 'Markdown 完整笔记', text: '纯文本转写', srt: 'SRT 字幕', json: 'JSON 数据',
-  }
   const exportSession = (kind: 'md' | 'txt' | 'srt' | 'json') => {
     const base = session.title.replace(/[\\/:*?"<>|]/g, '-') || '实时笔记'
     const completed = { ...session, elapsedMs: elapsed }
@@ -247,12 +247,12 @@ function App() {
         <div className="brand"><span className="brand-mark"><Volume2 size={18} /></span><strong>听记</strong><span>实时录音笔记</span></div>
         <div className="privacy"><ShieldCheck size={15} /> 笔记本机保存</div>
         <div className="top-actions">
-          <button className="ghost-button import-button" onClick={() => setImportOpen(true)}><Upload size={17} /> 导入音视频</button>
+          <button className="ghost-button import-button" onClick={() => setImportOpen(true)}><Upload size={17} /> 音视频速读</button>
           <button className="ghost-button" onClick={reset} title="新建记录"><RotateCcw size={17} /> 新建</button>
           <div className="export-wrap">
-            <button className="primary-small" onClick={() => setExportOpen((value) => !value)} disabled={!session.segments.length}><Download size={17} /> 导出 <ChevronDown size={14} /></button>
-            {exportOpen && <div className="export-menu">
-              {mediaJob?.status === 'completed' ? (Object.entries(mediaJob.artifacts) as Array<[MediaArtifactKey, string]>).map(([key, url]) => <a href={url} key={key}>{key === 'pptx' && <Presentation size={14} />} {mediaDownloadLabel[key]}</a>) : <>
+            <button className="primary-small" onClick={() => mediaJob?.status === 'completed' ? setMediaExportOpen(true) : setExportOpen((value) => !value)} disabled={!session.segments.length}><Download size={17} /> 导出 <ChevronDown size={14} /></button>
+            {exportOpen && mediaJob?.status !== 'completed' && <div className="export-menu">
+              <>
                 <button onClick={() => void exportDocument('docx')} disabled={exportBusy}>Word 文档</button>
                 <button onClick={() => void exportDocument('pdf')} disabled={exportBusy}>PDF 文档</button>
                 <button onClick={() => void exportDocument('pptx')} disabled={exportBusy}>PowerPoint</button>
@@ -261,7 +261,7 @@ function App() {
                 <button onClick={() => exportSession('srt')}>SRT 字幕</button>
                 <button onClick={() => exportSession('json')}>JSON 数据</button>
                 {recorder.audioUrl && <a href={recorder.audioUrl} download={`${session.title}.webm`}>原始录音 WebM</a>}
-              </>}
+              </>
             </div>}
           </div>
         </div>
@@ -312,7 +312,7 @@ function App() {
           </div>
         </section>
 
-        <aside className="summary-pane">
+        {mediaJob?.status === 'completed' && mediaJob.speedRead ? <SpeedReadPanel job={mediaJob} onJump={jumpTo} onUpdated={(job) => { setMediaJob(job); dispatch({ type: 'restore', session: sessionFromMediaJob(job) }) }} onNotice={setNotice} /> : <aside className="summary-pane">
           <div className="pane-heading summary-heading"><div><span className="eyebrow">LIVE NOTES</span><h1>实时总结</h1></div><button className="ai-button" onClick={deepenSummary} disabled={aiBusy || !session.segments.length || mediaJob?.status === 'processing' || (summaryConfig.backend === 'model' && (!summaryConfig.model?.apiKey || !summaryConfig.model.model))}><Sparkles size={16} /> {aiBusy ? '整理中...' : '重新整理'}</button></div>
           <div className="summary-scroll">
             <section className="headline-card"><span>{session.summary.source === 'openclaw' ? 'OPENCLAW' : session.summary.source === 'model' ? 'DIRECT MODEL' : '纯代码实时提取'}</span><h2>{session.summary.headline}</h2><p>最近更新 {new Date(session.summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</p></section>
@@ -324,10 +324,11 @@ function App() {
             <SummarySection icon={<FileText size={17} />} title={session.mode === 'meeting' ? '待确认问题' : '复习问题'} count={session.summary.openQuestions.length}>{noteRows(session.summary.openQuestions, jumpTo, '尚未识别到问题')}</SummarySection>
             {!!session.bookmarks.length && <SummarySection icon={<Bookmark size={17} />} title="手动重点" count={session.bookmarks.length}>{session.bookmarks.map((item) => <button className="note-row" key={item.id} onClick={() => jumpTo(item.atMs)}><span className="note-dot manual" /><span>{item.label}</span><time>{formatClock(item.atMs)}</time></button>)}</SummarySection>}
           </div>
-        </aside>
+        </aside>}
       </div>
       <footer className="statusbar"><span className={recorder.error ? 'error' : ''}>{recorder.error || notice}</span><span>{mediaJob ? '音视频由本机 faster-whisper 转写' : recorder.supported ? 'Chrome / Edge 实时识别可用' : '当前浏览器不支持实时识别，可使用演示能力'}</span></footer>
       {importOpen && <MediaImportDialog mode={session.mode} summaryConfig={summaryConfig} onClose={() => setImportOpen(false)} onCreated={acceptMediaJob} />}
+      {mediaExportOpen && mediaJob?.status === 'completed' && <MediaExportDialog job={mediaJob} onClose={() => setMediaExportOpen(false)} />}
     </main>
   )
 }

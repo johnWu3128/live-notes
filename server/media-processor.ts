@@ -11,6 +11,9 @@ import type { MediaProcessor, MediaProcessorInput } from './media-types'
 import { generatePresentation } from './presentation-service'
 import { generatePdfDocument, generateWordDocument } from './document-service'
 import type { SummaryRequest, SummaryResult } from './summary-service'
+import { buildSpeedReadGuide } from './speed-read-service'
+import { generateSpeedReadArtifacts } from './speed-read-export-service'
+import type { SpeedReadChapter, SpeedReadFrame } from './media-types'
 
 const execFileAsync = promisify(execFile)
 const serverDir = path.dirname(fileURLToPath(import.meta.url))
@@ -104,6 +107,42 @@ const captureFrames = async (sourcePath: string, outputDir: string, plan: Return
   }
 }
 
+const frameTranscript = (segments: TranscriptSegment[], startMs: number, endMs: number) => segments
+  .filter((segment) => segment.isFinal && segment.startMs < endMs && segment.endMs >= startMs)
+  .map((segment) => segment.text.trim())
+  .filter(Boolean)
+  .join(' ')
+
+const chapterAt = (chapters: SpeedReadChapter[], atMs: number) => Math.max(0, chapters.findIndex((chapter) => atMs >= chapter.startMs && atMs < chapter.endMs))
+
+export const captureSpeedReadFrames = async (
+  sourcePath: string,
+  outputDir: string,
+  durationMs: number,
+  segments: TranscriptSegment[],
+  chapters: SpeedReadChapter[],
+) => {
+  const intervalSeconds = Math.max(30, Math.ceil(durationMs / 80 / 1000))
+  const frameDir = path.join(outputDir, 'speed-read-frames')
+  await fs.mkdir(frameDir, { recursive: true })
+  await runFile(process.env.FFMPEG_PATH || 'ffmpeg', [
+    '-y', '-i', sourcePath, '-vf', `fps=1/${intervalSeconds},scale=1280:-2`, '-q:v', '3',
+    path.join(frameDir, 'frame-%03d.jpg'),
+  ], Math.max(300_000, Math.ceil(durationMs / 3)))
+  const names = (await fs.readdir(frameDir)).filter((name) => /^frame-\d+\.jpg$/i.test(name)).sort()
+  return names.map((name, index): SpeedReadFrame => {
+    const startMs = Math.min(durationMs, index * intervalSeconds * 1000)
+    const endMs = Math.min(durationMs, startMs + intervalSeconds * 1000)
+    return {
+      startMs,
+      endMs,
+      transcript: frameTranscript(segments, startMs, endMs),
+      chapterIndex: chapterAt(chapters, startMs),
+      imagePath: path.join(frameDir, name),
+    }
+  })
+}
+
 const writeArtifacts = async (input: MediaProcessorInput, durationMs: number, segments: TranscriptSegment[], summary: SummaryResult['summary']) => {
   const base = safeName(input.title)
   const session: NoteSession = {
@@ -146,12 +185,15 @@ export function createMediaProcessor(summarize: Summarize): MediaProcessor {
       backend: input.summaryConfig?.backend || 'local', model: input.summaryConfig?.model,
     })
     const plan = buildDeckPlan({ title: input.title, mode: input.mode, durationMs, segments, summary: summaryResult.summary, sourceName: input.sourceName || path.basename(input.sourcePath), hasVideo })
+    const speedRead = buildSpeedReadGuide({ title: input.title, mode: input.mode, durationMs, segments, summary: summaryResult.summary })
 
     if (hasVideo) {
       events.update({ stage: 'capturing', progress: 88, message: '正在提取章节关键画面' })
       await captureFrames(input.sourcePath, input.outputDir, plan)
+      events.update({ stage: 'capturing', progress: 91, message: '正在生成音视频速读画面' })
+      speedRead.frames = await captureSpeedReadFrames(input.sourcePath, input.outputDir, durationMs, segments, speedRead.chapters)
     }
-    events.update({ stage: 'presenting', progress: 94, message: '正在生成可编辑 PPT 和完整笔记' })
+    events.update({ stage: 'presenting', progress: 94, message: '正在生成速读导出文件和完整笔记' })
     const artifacts = await writeArtifacts(input, durationMs, segments, summaryResult.summary)
     const pptx = path.join(input.outputDir, `${safeName(input.title)}.pptx`)
     await generatePresentation(plan, pptx)
@@ -162,6 +204,12 @@ export function createMediaProcessor(summarize: Summarize): MediaProcessor {
       segments, summary: summaryResult.summary, bookmarks: [],
     }
     await Promise.all([generateWordDocument(session, docx), generatePdfDocument(session, pdf)])
-    return { durationMs, mediaKind: hasVideo ? 'video' : 'audio', summary: summaryResult.summary, artifacts: { ...artifacts, docx, pdf, pptx } }
+    const speedReadArtifacts = await generateSpeedReadArtifacts({
+      title: input.title, mode: input.mode, durationMs, segments, summary: summaryResult.summary, guide: speedRead,
+    }, input.outputDir)
+    return {
+      durationMs, mediaKind: hasVideo ? 'video' : 'audio', summary: summaryResult.summary, speedRead,
+      artifacts: { ...artifacts, docx, pdf, pptx, ...speedReadArtifacts },
+    }
   }
 }

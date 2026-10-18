@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -39,5 +39,28 @@ describe('HTTP API', () => {
       .attach('audio', Buffer.from('RIFF1234WAVE'), { filename: 'chunk.wav', contentType: 'audio/wav' })
       .expect(200)
       .expect(({ body }) => expect(body.segments[0]).toMatchObject({ text: '电脑正在播放课程内容。', startMs: 12_000 }))
+  })
+
+  it('validates and saves speed-read notes into a regenerated Word artifact', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'live-notes-notes-api-'))
+    const manager = new MediaJobManager({
+      outputRoot: directory,
+      processor: async (input) => ({
+        durationMs: 1_000, mediaKind: 'audio', summary: emptySummary(),
+        speedRead: {
+          keywords: [], abstract: '摘要', chapters: [], speakerSummaries: [], reviews: [], todos: [],
+          mindMap: { title: '测试', children: [] }, notes: '', frames: [],
+        },
+        artifacts: { notesDocx: path.join(input.outputDir, '测试_笔记.docx') },
+      }),
+    })
+    const created = await manager.create({ sourcePath: 'D:/media/demo.wav', mode: 'meeting', title: '测试' })
+    await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'))
+    const app = createApp(async () => { throw new Error('should not run') }, manager)
+
+    await request(app).post(`/api/media/jobs/${created.id}/notes`).send({ notes: '补充结论' }).expect(200)
+      .expect(({ body }) => expect(body.speedRead.notes).toBe('补充结论'))
+    expect((await fs.readFile(manager.getArtifact(created.id, 'notesDocx')!)).subarray(0, 2).toString()).toBe('PK')
+    await request(app).post(`/api/media/jobs/${created.id}/notes`).send({ notes: 'x'.repeat(100_001) }).expect(400)
   })
 })

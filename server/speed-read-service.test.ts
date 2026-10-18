@@ -17,8 +17,8 @@ describe('speed read service', () => {
         ...emptySummary(),
         headline: '完成知识库与问答智能体实操',
         topics: [
-          { title: '知识库构建', detail: '上传文档并分块', sourceStartMs: 0 },
-          { title: '智能体发布', detail: '关联知识库并通过 API 验证', sourceStartMs: 95_000 },
+          { text: '知识库构建', sourceStartMs: 0 },
+          { text: '智能体发布', sourceStartMs: 95_000 },
         ],
         keyPoints: [
           { text: '知识库文档需要先分块', sourceStartMs: 10_000 },

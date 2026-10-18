@@ -4,6 +4,7 @@ import path from 'node:path'
 import { emptySummary } from '../src/domain/types'
 import { createSummary } from '../src/domain/summary-engine'
 import type { MediaArtifactKey, MediaJob, MediaJobInput, MediaProcessor } from './media-types'
+import { generateSpeedReadNotesDocument } from './speed-read-export-service'
 
 interface MediaJobManagerOptions {
   processor: MediaProcessor
@@ -66,6 +67,26 @@ export class MediaJobManager {
 
   getSource(id: string) {
     return this.jobs.get(id)?.sourcePath
+  }
+
+  getSpeedReadFrame(id: string, index: number) {
+    return this.jobs.get(id)?.speedRead?.frames[index]?.imagePath
+  }
+
+  async updateNotes(id: string, notes: string) {
+    const job = this.jobs.get(id)
+    if (!job?.speedRead || job.status !== 'completed') return undefined
+    job.speedRead.notes = notes
+    job.updatedAt = new Date().toISOString()
+    const target = job.artifacts.notesDocx
+    if (target) {
+      await generateSpeedReadNotesDocument({
+        title: job.title, mode: job.mode, durationMs: job.durationMs, segments: job.segments,
+        summary: job.summary, guide: job.speedRead,
+      }, target)
+    }
+    this.persist(job)
+    return this.publicJob(job)
   }
 
   private async run(job: MediaJob, input: MediaJobInput) {
@@ -138,6 +159,13 @@ export class MediaJobManager {
     return {
       ...visible,
       artifacts: Object.fromEntries(Object.keys(job.artifacts).map((key) => [key, `/api/media/jobs/${job.id}/artifacts/${key}`])),
+      speedRead: job.speedRead ? {
+        ...job.speedRead,
+        frames: job.speedRead.frames.map(({ imagePath: _imagePath, ...frame }, index) => ({
+          ...frame,
+          imageUrl: _imagePath ? `/api/media/jobs/${job.id}/frames/${index}` : undefined,
+        })),
+      } : undefined,
       mediaUrl: `/api/media/jobs/${job.id}/media`,
     }
   }

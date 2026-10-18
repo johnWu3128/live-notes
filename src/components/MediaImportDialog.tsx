@@ -65,7 +65,7 @@ export function MediaImportDialog({ mode, onClose, onCreated, summaryConfig }: M
 
   return <div className="modal-backdrop" role="presentation">
     <section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title">
-      <header><div><span className="eyebrow">MEDIA TO NOTES</span><h2 id="media-dialog-title">导入音视频生成笔记与 PPT</h2></div><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button></header>
+      <header><div><span className="eyebrow">MEDIA SPEED READ</span><h2 id="media-dialog-title">音视频速读</h2><p>音频和视频转文字、导读、脑图、笔记与 PPT</p></div><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={19} /></button></header>
       <div className="source-tabs">
         <button type="button" className={sourceMode === 'file' ? 'active' : ''} onClick={() => setSourceMode('file')}><Upload size={16} /> 选择文件</button>
         <button type="button" className={sourceMode === 'path' ? 'active' : ''} onClick={() => setSourceMode('path')}><FolderOpen size={16} /> 本机路径</button>
@@ -77,8 +77,8 @@ export function MediaImportDialog({ mode, onClose, onCreated, summaryConfig }: M
           <strong>{file?.name || '选择 MP4、MP3、WAV、M4A 等文件'}</strong>
           <span>{file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : '支持长视频，上传后在后台处理'}</span>
         </label> : <label className="field-label">本机文件绝对路径<input value={localPath} onChange={(event) => setLocalPath(event.target.value)} placeholder="D:\\Videos\\meeting.mp4" required /></label>}
-        <label className="field-label">笔记与 PPT 标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="留空时使用文件名" /></label>
-        <div className="media-deliverables"><span>完整转写</span><span>实时总结</span><span>关键画面</span><span>Word / PDF</span><span>MD / PPTX</span></div>
+        <label className="field-label">成果标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="留空时使用文件名" /></label>
+        <div className="media-deliverables"><span>原文 Word</span><span>导读 Word</span><span>思维导图 XMind</span><span>提取 PPT</span><span>个人笔记</span><span>PDF / MD / SRT</span></div>
         <p className="privacy-note"><ShieldCheck size={15} /> 媒体与转写保存在本机；当前使用{summaryConfig.backend === 'local' ? '纯代码总结，不调用外部模型' : summaryConfig.backend === 'model' ? '直连模型总结，API Key 不落盘' : '本机 OpenClaw 总结'}。</p>
         {busy && sourceMode === 'file' && <div className="upload-progress"><i style={{ width: `${progress}%` }} /><span>正在上传 {progress}%</span></div>}
         {error && <p className="form-error">{error}</p>}
